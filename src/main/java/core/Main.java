@@ -27,7 +27,6 @@ public class Main {
 
 		// Register bot
 		Nat20bot bot = new Nat20bot();
-		botsApi.registerBot(bot);
 
 		// Open saved states (if any)
 		try {
@@ -38,6 +37,8 @@ public class Main {
 		} catch (Exception e) {
 			System.err.println("WARNING: Failed to load backup, starting with empty state: " + e.getMessage());
 		}
+
+		botsApi.registerBot(bot);
 
 		// Save states on shutdown
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -65,7 +66,8 @@ public class Main {
 			}
 		}).start();
 
-		// // Remote upload thread: runs every minute to avoid exceeding GitHub API rate limits
+		// // Remote upload thread: runs every minute to avoid exceeding GitHub API rate
+		// limits
 		new Thread(() -> {
 			while (true) {
 				try {
