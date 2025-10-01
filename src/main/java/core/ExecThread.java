@@ -336,7 +336,6 @@ public class ExecThread extends Thread {
 			player.getCaptionGenerator().resetToDefault();
 			message.setText("Le frasi sono state reimpostate a quelle di default");
 		} else if (messageText.equals("/exit") && userId == ADMIN_USER_ID) {
-			message.setText("Server chiuso, stati salvati");
 			System.exit(0);
 		}
 

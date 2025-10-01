@@ -54,17 +54,6 @@ public class Main {
 			}
 		}));
 
-		// Local fast checkpoint thread
-		new Thread(() -> {
-			while (true) {
-				try {
-					TimeUnit.SECONDS.sleep(15);
-					Backup.save(bot); // saves locally with timestamp
-				} catch (Exception e) {
-					e.printStackTrace(); // log and continue
-				}
-			}
-		}).start();
 
 		// // Remote upload thread: runs every minute to avoid exceeding GitHub API rate
 		// limits
