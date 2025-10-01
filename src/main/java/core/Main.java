@@ -1,6 +1,9 @@
 package core;
 
+import java.io.File;
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeUnit;
 
 import org.telegram.telegrambots.meta.TelegramBotsApi;
@@ -8,61 +11,66 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
 import utils.Backup;
+import utils.GitHubStorage;
 
 public class Main {
-
+	// TODO Improve the backup system in future releases
 	public static void main(String... Args)
-			throws NoSuchFieldException, SecurityException, IOException, ClassNotFoundException, TelegramApiException {
-		/*
-		 * Logger logger = Logger.getLogger("Main.class.getName()");
-		 * Properties prop = .getProperties();
-		 * prop.setProperty("java.util.logging.config.file", "log/conf.txt");
-		 * LogManager.getLogManager().readConfiguration()
-		 */
+			throws NoSuchFieldException, SecurityException, IOException, ClassNotFoundException, TelegramApiException,
+			InterruptedException {
 
-		//TODO dummy webserver to keep bot online, to remove in future deployment
+		// TODO dummy webserver to keep bot online, to remove in future deployment
 		WebStub.start();
 
-		// api initialize
+		// Initialize Telegram API
 		TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
 
-		// bot registration api
+		// Register bot
 		Nat20bot bot = new Nat20bot();
-		try {
-			botsApi.registerBot(bot);
-		} catch (TelegramApiException e) {
-			e.printStackTrace();
-		}
+		botsApi.registerBot(bot);
 
-		// open saved states
+
 		Backup.open(bot);
+		// Save states on shutdown
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+			try {
+				System.out.println("Shutdown detected, saving state...");
+				Backup.save(bot);
+				File today = new File("backup/game_" +
+						LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE) + ".dnd");
+				GitHubStorage.upload(today);
+				System.out.println("State saved successfully on shutdown");
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}));
 
-		// save states
-		// on shutdown
-		Runtime.getRuntime().addShutdownHook(new Thread() {
-			public void run() {
+		// Local fast checkpoint thread
+		new Thread(() -> {
+			while (true) {
 				try {
-					Backup.save(bot);
-					System.out.println("states saved");
-				} catch (SecurityException | NoSuchFieldException | IOException e) {
+					TimeUnit.SECONDS.sleep(15);
+					Backup.save(bot); // saves locally with timestamp
+				} catch (Exception e) {
+					e.printStackTrace(); // log and continue
+				}
+			}
+		}).start();
+
+		// // Remote upload thread: runs every minute to avoid exceeding GitHub API rate limits
+		new Thread(() -> {
+			while (true) {
+				try {
+					TimeUnit.MINUTES.sleep(1);
+					File today = new File("backup/game_" +
+							LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE) + ".dnd");
+					if (today.exists()) {
+						GitHubStorage.upload(today);
+					}
+				} catch (Exception e) {
 					e.printStackTrace();
 				}
 			}
-		});
-
-		// every 15 seconds
-		new Thread() {
-			public void run() {
-				while (true) {
-					try {
-						TimeUnit.SECONDS.sleep(15);
-						Backup.save(bot);
-					} catch (IOException | InterruptedException | NoSuchFieldException | SecurityException e) {
-						e.printStackTrace();
-					}
-				}
-			}
-		}.start();
-
+		}).start();
 	}
 }
