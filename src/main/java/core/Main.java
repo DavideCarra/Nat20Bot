@@ -29,8 +29,16 @@ public class Main {
 		Nat20bot bot = new Nat20bot();
 		botsApi.registerBot(bot);
 
+		// Open saved states (if any)
+		try {
+			File backupFile = GitHubStorage.downloadLatest();
+			if (backupFile.exists()) {
+				Backup.open(bot);
+			}
+		} catch (Exception e) {
+			System.err.println("WARNING: Failed to load backup, starting with empty state: " + e.getMessage());
+		}
 
-		Backup.open(bot);
 		// Save states on shutdown
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 			try {
