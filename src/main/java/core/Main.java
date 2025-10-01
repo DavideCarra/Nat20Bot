@@ -1,4 +1,5 @@
- package core;
+package core;
+
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
@@ -10,13 +11,18 @@ import utils.Backup;
 
 public class Main {
 
+	public static void main(String... Args)
+			throws NoSuchFieldException, SecurityException, IOException, ClassNotFoundException, TelegramApiException {
+		/*
+		 * Logger logger = Logger.getLogger("Main.class.getName()");
+		 * Properties prop = .getProperties();
+		 * prop.setProperty("java.util.logging.config.file", "log/conf.txt");
+		 * LogManager.getLogManager().readConfiguration()
+		 */
 
-	public static void main(String... Args) throws NoSuchFieldException, SecurityException, IOException, ClassNotFoundException, TelegramApiException {
-		/*Logger logger = Logger.getLogger("Main.class.getName()");
-		Properties prop =  .getProperties();
-		prop.setProperty("java.util.logging.config.file", "log/conf.txt");
-		LogManager.getLogManager().readConfiguration()*/
-			
+		//TODO dummy webserver to keep bot online, to remove in future deployment
+		WebStub.start();
+
 		// api initialize
 		TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
 
@@ -44,7 +50,7 @@ public class Main {
 			}
 		});
 
-	// every 15 seconds
+		// every 15 seconds
 		new Thread() {
 			public void run() {
 				while (true) {

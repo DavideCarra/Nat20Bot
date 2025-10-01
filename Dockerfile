@@ -27,8 +27,14 @@ WORKDIR /app
 # Copy final jar
 COPY --from=build /app/target/nat20bot-1.0-SNAPSHOT.jar app.jar
 
+# Create folder to store backups
+RUN mkdir -p /app/backup
+
 # env variable
 ENV BOT_TOKEN=changeme
+
+# Expose port //TODO workaround to keep bot online, to remove in future deployment
+EXPOSE 8080
 
 # bot start
 ENTRYPOINT ["java","-jar","app.jar"]

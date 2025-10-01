@@ -3,5 +3,7 @@ services:
   bot:
     build: .
     container_name: dnd_bot
+    ports:
+      - "8080:8080" #TODO workaround to keep bot online, to remove in future deployment
     environment:
       - BOT_TOKEN="test_token"
