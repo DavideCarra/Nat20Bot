@@ -25,7 +25,7 @@ FROM eclipse-temurin:17
 WORKDIR /app
 
 # Copy final jar
-COPY --from=build /app/target/*.jar app.jar
+COPY --from=build /app/target/nat20bot-1.0-SNAPSHOT.jar app.jar
 
 # env variable
 ENV BOT_TOKEN=changeme
