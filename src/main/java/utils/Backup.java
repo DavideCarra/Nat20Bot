@@ -17,7 +17,8 @@ import core.Nat20bot;
 
 public class Backup {
 
-    private static <K, V> void saveBackup(Map<K, V> savableFile) throws IOException, NoSuchFieldException, SecurityException {
+    private static <K, V> void saveBackup(Map<K, V> savableFile)
+            throws IOException, NoSuchFieldException, SecurityException {
         File backupDir = new File("backup/");
         if (!backupDir.exists()) {
             backupDir.mkdirs(); // crea cartella se non c’è
@@ -25,7 +26,7 @@ public class Backup {
 
         String name = createName(savableFile);
         try (FileOutputStream fos = new FileOutputStream(new File(backupDir, name + ".dnd"));
-             ObjectOutputStream oos = new ObjectOutputStream(fos)) {
+                ObjectOutputStream oos = new ObjectOutputStream(fos)) {
             oos.writeObject(savableFile);
         }
     }
@@ -43,6 +44,7 @@ public class Backup {
             return new ConcurrentHashMap<>();
         }
 
+        // Find the most recently modified backup
         File latest = Arrays.stream(files)
                 .max(Comparator.comparingLong(File::lastModified))
                 .orElse(null);
@@ -51,6 +53,14 @@ public class Backup {
             return new ConcurrentHashMap<>();
         }
 
+        // Delete all other backups, keep only the latest
+        for (File f : files) {
+            if (!f.equals(latest)) {
+                f.delete();
+            }
+        }
+
+        // set most recent file
         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(latest))) {
             return (ConcurrentHashMap<K, V>) ois.readObject();
         }

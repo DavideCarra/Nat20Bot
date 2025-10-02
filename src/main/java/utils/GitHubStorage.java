@@ -11,16 +11,20 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.regex.Pattern;
 
-// TODO Temporary GitHub-based storage system, to be replaced in future releases
+// TODO: Temporary GitHub-based backup system. Will migrate to more robust solutions
+//       (AWS S3, Cloud Storage, or dedicated database) in future releases
 public class GitHubStorage {
 
     private static final HttpClient client = HttpClient.newHttpClient();
-    private static final DateTimeFormatter TAG_FMT = DateTimeFormatter.BASIC_ISO_DATE; // yyyyMMdd
-    private static final Pattern DATE_TAG = Pattern.compile("^\\d{8}$"); // e.g. 20251001
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
+    // private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss"); // to use hours, minutes and seconds
+    private static final Pattern DATE_TAG = Pattern.compile("^\\d{8}$");
+    //private static final Pattern DATE_TAG = Pattern.compile("^\\d{8}(\\d{6})?$"); // to use hours, minutes and seconds
 
     private static String getRepo() {
         return Env.getRequired("GITHUB_REPO");
@@ -38,160 +42,145 @@ public class GitHubStorage {
                 .header("User-Agent", "Nat20bot-Backup/1.0");
     }
 
-    private static String[] ownerRepo() {
-        String[] p = getRepo().split("/", 2);
-        if (p.length != 2)
-            throw new IllegalStateException("GITHUB_REPO must be in the form 'owner/repo'");
-        return p;
-    }
-
-    /** Returns the repository's default branch */
     private static String defaultBranch() throws IOException, InterruptedException {
-        String[] or = ownerRepo();
-        HttpRequest req = base("https://api.github.com/repos/" + or[0] + "/" + or[1]).build();
+        HttpRequest req = base("https://api.github.com/repos/" + getRepo()).build();
         HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
         if (res.statusCode() != 200)
-            throw new IOException("Repo info failed: " + res.statusCode() + " " + res.body());
+            throw new IOException("Failed to get repo info: " + res.statusCode());
         return new JSONObject(res.body()).getString("default_branch");
     }
 
-    /** Returns the SHA of a file at a given ref, or null if it doesn't exist */
     private static String getFileSha(String path, String ref) throws IOException, InterruptedException {
+        // Query GitHub API to check if file exists and get its SHA (needed for updates)
         String url = "https://api.github.com/repos/" + getRepo() + "/contents/" + path
                 + (ref != null ? "?ref=" + ref : "");
         HttpRequest req = base(url).build();
         HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
-        if (res.statusCode() == 200) {
-            return new JSONObject(res.body()).getString("sha");
-        } else if (res.statusCode() == 404) {
-            return null;
-        }
-        throw new IOException("getFileSha failed: " + res.statusCode() + " " + res.body());
+        if (res.statusCode() == 404) return null;
+        if (res.statusCode() != 200)
+            throw new IOException("Failed to get file SHA: " + res.statusCode());
+        return new JSONObject(res.body()).getString("sha");
     }
 
-    /** Creates or updates a file in the repository */
-    private static JSONObject putFile(String path, byte[] bytes, String message, String branch)
+    private static void putFile(String path, byte[] bytes, String message, String branch)
             throws IOException, InterruptedException {
-        String sha = getFileSha(path, branch); // can be null
+        String sha = getFileSha(path, branch);
         JSONObject body = new JSONObject()
                 .put("message", message)
                 .put("content", Base64.getEncoder().encodeToString(bytes))
                 .put("branch", branch);
-        if (sha != null)
-            body.put("sha", sha);
+        if (sha != null) body.put("sha", sha);
 
         HttpRequest req = base("https://api.github.com/repos/" + getRepo() + "/contents/" + path)
                 .PUT(HttpRequest.BodyPublishers.ofString(body.toString()))
                 .build();
 
         HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
-        if (res.statusCode() != 200 && res.statusCode() != 201) {
-            throw new IOException("putFile failed: " + res.statusCode() + " " + res.body());
-        }
-        return new JSONObject(res.body()); // contains "commit" -> "sha"
+        if (res.statusCode() != 200 && res.statusCode() != 201)
+            throw new IOException("Failed to upload file: " + res.statusCode());
     }
 
-    /** Creates a new tag or moves an existing one to a given commit SHA */
-    private static void createOrMoveTagTo(String tag, String commitSha) throws IOException, InterruptedException {
-        // try to create
+    private static void createOrMoveTag(String tag, String commitSha) throws IOException, InterruptedException {
         JSONObject create = new JSONObject().put("ref", "refs/tags/" + tag).put("sha", commitSha);
         HttpRequest createReq = base("https://api.github.com/repos/" + getRepo() + "/git/refs")
                 .POST(HttpRequest.BodyPublishers.ofString(create.toString())).build();
         HttpResponse<String> createRes = client.send(createReq, HttpResponse.BodyHandlers.ofString());
-        if (createRes.statusCode() == 201)
-            return;
-
-        // if already exists, move it with force=true
+        
+        if (createRes.statusCode() == 201) return;
+        
         if (createRes.statusCode() == 422) {
             JSONObject patch = new JSONObject().put("sha", commitSha).put("force", true);
             HttpRequest patchReq = base("https://api.github.com/repos/" + getRepo() + "/git/refs/tags/" + tag)
                     .method("PATCH", HttpRequest.BodyPublishers.ofString(patch.toString()))
                     .build();
             HttpResponse<String> patchRes = client.send(patchReq, HttpResponse.BodyHandlers.ofString());
-            if (patchRes.statusCode() == 200)
-                return;
-            throw new IOException("update tag failed: " + patchRes.statusCode() + " " + patchRes.body());
+            if (patchRes.statusCode() == 200) return;
+            throw new IOException("Failed to update tag: " + patchRes.statusCode());
         }
-
-        throw new IOException("create tag failed: " + createRes.statusCode() + " " + createRes.body());
+        throw new IOException("Failed to create tag: " + createRes.statusCode());
     }
 
-    /** Finds the most recent tag in yyyyMMdd format */
     private static String latestDateTag() throws IOException, InterruptedException {
+        // Fetch all repository tags and find the most recent one in yyyyMMdd format
         HttpRequest req = base("https://api.github.com/repos/" + getRepo() + "/tags").build();
         HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
         if (res.statusCode() != 200)
-            throw new IOException("list tags failed: " + res.statusCode() + " " + res.body());
+            throw new IOException("Failed to list tags: " + res.statusCode());
 
         JSONArray arr = new JSONArray(res.body());
-        String best = null;
+        String latest = null;
         for (int i = 0; i < arr.length(); i++) {
-            JSONObject t = arr.getJSONObject(i);
-            String name = t.getString("name");
-            if (DATE_TAG.matcher(name).matches() && (best == null || name.compareTo(best) > 0)) {
-                best = name;
+            String name = arr.getJSONObject(i).getString("name");
+            // Find the lexicographically largest date tag (most recent)
+            if (DATE_TAG.matcher(name).matches() && (latest == null || name.compareTo(latest) > 0)) {
+                latest = name;
             }
         }
-        if (best == null)
-            throw new IOException("No tag in yyyyMMdd format found");
-        return best;
+        if (latest == null)
+            throw new IOException("No backup tags found in format yyyyMMdd");
+        return latest;
     }
 
-    /** Downloads the content of a file at a given ref */
-    private static byte[] downloadContentAtRef(String path, String ref) throws IOException, InterruptedException {
+    private static byte[] downloadFile(String path, String ref) throws IOException, InterruptedException {
         String url = "https://api.github.com/repos/" + getRepo() + "/contents/" + path + "?ref=" + ref;
         HttpRequest req = base(url).build();
         HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
         if (res.statusCode() != 200)
-            throw new IOException("download failed: " + res.statusCode() + " " + res.body());
+            throw new IOException("Failed to download file: " + res.statusCode());
 
-        JSONObject j = new JSONObject(res.body());
-        String enc = j.getString("encoding");
-        if (!"base64".equals(enc))
-            throw new IOException("Unexpected encoding: " + enc);
-        String base64 = j.getString("content").replace("\n", "").replace("\r", "");
-        return Base64.getDecoder().decode(base64);
+        JSONObject json = new JSONObject(res.body());
+        if (!"base64".equals(json.getString("encoding")))
+            throw new IOException("Unexpected encoding: " + json.getString("encoding"));
+        
+        return Base64.getDecoder().decode(json.getString("content").replaceAll("\\s", ""));
     }
 
     /**
-     * Uploads:
-     * - backup.dnd (latest snapshot)
-     * - backups/game_yyyyMMdd.dnd (overwrites today's copy)
-     * - tag yyyyMMdd pointing to the commit that wrote backup.dnd
+     * Upload backup file to GitHub with date tag
      */
     public static void upload(File file) throws IOException, InterruptedException {
         byte[] bytes = Files.readAllBytes(file.toPath());
         String branch = defaultBranch();
+        String today = LocalDate.now().format(DATE_FMT);
+        //String today = LocalDateTime.now().format(DATE_FMT); // to use hours, minutes and seconds
+        String path = "backups/game_" + today + ".dnd";
 
-        // 1) update backup.dnd and get commit SHA from PUT
-        JSONObject put1 = putFile("backup.dnd", bytes, "backup update (" + LocalDate.now() + ")", branch);
-        String commitSha = put1.getJSONObject("commit").getString("sha");
-
-        // 2) dated copy
-        String datedName = "backups/game_" + LocalDate.now().format(TAG_FMT) + ".dnd";
-        putFile(datedName, bytes, "backup copy for " + LocalDate.now(), branch);
-
-        // 3) tag of the day -> commit from step 1
-        String today = LocalDate.now().format(TAG_FMT);
-        createOrMoveTagTo(today, commitSha);
-        System.out.println("Uploaded and tagged as " + today + " at " + commitSha);
+        // Upload the backup file (overwrites if exists)
+        putFile(path, bytes, "Backup " + today, branch);
+        
+        // Create or update a git tag pointing to this backup commit
+        HttpRequest req = base("https://api.github.com/repos/" + getRepo() + "/commits?path=" + path + "&per_page=1").build();
+        HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
+        if (res.statusCode() == 200) {
+            JSONArray commits = new JSONArray(res.body());
+            if (commits.length() > 0) {
+                String commitSha = commits.getJSONObject(0).getString("sha");
+                createOrMoveTag(today, commitSha);
+                System.out.println("[OK] Backup uploaded: " + path + " (tag: " + today + ")");
+                return;
+            }
+        }
+        System.out.println("[OK] Backup uploaded: " + path + " (no tag created)");
     }
 
     /**
-     * Downloads 'backups/game_yyyyMMdd.dnd' from the most recent date tag
-     * and stores it locally in backup/game_yyyyMMdd.dnd
+     * Download the most recent backup available (not necessarily today's)
+     * This ensures recovery even if bot crashed before creating today's backup
      */
     public static File downloadLatest() throws IOException, InterruptedException {
         String tag = latestDateTag();
         String filename = "game_" + tag + ".dnd";
         String path = "backups/" + filename;
-        byte[] bytes = downloadContentAtRef(path, tag);
+        
+        byte[] bytes = downloadFile(path, tag);
+        
+        // Save to local backup directory
         File backupDir = new File("backup/");
-        if (!backupDir.exists()) backupDir.mkdirs();
+        backupDir.mkdirs();
         File dest = new File(backupDir, filename);
         Files.write(dest.toPath(), bytes);
 
-        System.out.println("Downloaded " + dest.getAbsolutePath() + " from tag " + tag);
+        System.out.println("[OK] Downloaded backup from " + tag + " (" + bytes.length + " bytes)");
         return dest;
     }
 }
